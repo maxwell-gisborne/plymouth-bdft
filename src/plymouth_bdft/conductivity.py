@@ -3,7 +3,6 @@
 # How to exactly intergrate it with the above is also not fully worked out yet.
 
 import numpy as np
-from typing import Self
 
 from plymouth_bdft.immutiblenamespace import imns
 # from plotting_utils import plt, plot_points
@@ -52,13 +51,13 @@ class KSpace:
                       self.ft(fk),
                       self.wy * -im)))
 
-    def calculate_dule_space(self) -> Self:
+    def calculate_dule_space(self):
         return self(
                 wx = 2*np.pi*np.fft.fftfreq(self.kx.shape[0], 1/self.spacial_resolution[0]),
                 wy = 2*np.pi*np.fft.fftfreq(self.ky.shape[0], 1/self.spacial_resolution[1]),
         )
 
-    def calculate_LD(self) -> Self:
+    def calculate_LD(self):
         Lx = self.kx[-1] - self.kx[0]
         Ly = self.ky[-1] - self.ky[0]
         dx = self.kx[1] - self.kx[0]
@@ -70,7 +69,7 @@ class KSpace:
                     DK = Lx*Ly / (Nx*Ny)**.5,
                     spacial_resolution=[dx, dy])
 
-    def init_with_square_tile(self, delta: float = .5, tileing_number: int = 2,) -> Self:
+    def init_with_square_tile(self, delta: float = .5, tileing_number: int = 2,):
         ky = np.arange(0, tileing_number * np.pi*4/3**.5, delta)
         kx = np.arange(0, tileing_number * np.pi*4/3*3,   delta)
         return self(kx = kx, ky = ky).calculate_LD().calculate_dule_space()
@@ -152,12 +151,12 @@ class KSpace:
     def reshape_points_to_mesh(self, points: np.ndarray) -> np.ndarray:
         return points.reshape(self.Nx, self.Ny, -1)
 
-    def _check_reshapes(self) -> Self:
+    def _check_reshapes(self):
         mesh = self.k_mesh()
         assert np.all(mesh == self.reshape_points_to_mesh(self.reshape_mesh_to_points(mesh)))
         return self
 
-    def _check_dimentions_of_kmesh(self) -> Self:
+    def _check_dimentions_of_kmesh(self):
         assert self.k_mesh().shape == (self.Nx, self.Ny, 2)
         return self
 
@@ -195,7 +194,7 @@ class Classical_Conductivity:
     kernel_factor: np.ndarray = None
     sigma: np.ndarray = None
 
-    def init_kspace(self, **kwargs) -> Self:
+    def init_kspace(self, **kwargs):
         return self(
                 kspace = (KSpace(**kwargs)
                           .calculate_LD()
@@ -206,7 +205,7 @@ class Classical_Conductivity:
     def plot_fermi_distribution(self, beta=1, mu=0, **plot_args):
         return self.kspace.plot_over_k(rho_f(beta, mu)(self.Energy), **plot_args)
 
-    def calculate_kernel_factor(self) -> Self:
+    def calculate_kernel_factor(self):
         ''' Z(wx, wy) = 1/(1+1im*(τ*e/hbar)*(wx*Efield_x + wy*Efield_y))
             kernel_factor(wx, wy) = 1im*(e^2 * τ)/(hbar^2) .* (Z.(wx, wy)).^2 '''
 
@@ -224,7 +223,7 @@ class Classical_Conductivity:
                 self.kspace.reshape_points_to_mesh(self.Energy)[:, :, 0],
                 l=l)
 
-    def calculate_conductivity(self) -> Self:
+    def calculate_conductivity(self):
         ''' ∂Ekx = ∂kx(E.(kx, ky))
             ∂Eky = ∂ky(E.(kx, ky))
 

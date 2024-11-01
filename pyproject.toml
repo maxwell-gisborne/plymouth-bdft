@@ -1,13 +1,14 @@
 [project]
 name = "plymouth_bdft"
 authors = [ {name = "Maxwell Gisborne", email = "maxwell.gisborne@plymouth.ac.uk"}, ]
-version = "0.2.1"
-requires-python = ">= 3.11"
+version = "0.3.2"
+requires-python = ">= 3.10"
 dependencies = [
     "scipy >= 1.14",
     "numpy >= 2.1",
     "PyYAML >= 6.0",
     "six >= 1.16",
+    "ricetypes >=0.1.2",
 ]
 
 [build-system]
@@ -42,5 +43,4 @@ pybigdft = [
     "pyFutile >= 1.9.3",
     ]
 
-all = ['bdft_analysis[dev,plots,pybigdft]']
-    
+all = ['plymouth_bdft[dev,plots,pybigdft]']
