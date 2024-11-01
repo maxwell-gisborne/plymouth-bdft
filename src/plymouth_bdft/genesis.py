@@ -3,7 +3,7 @@ from pathlib import Path, PosixPath
 import time
 from subprocess import Popen, PIPE
 import pickle
-from ricetypes import Result
+from ricetypes import Result, Enum, Scalar_Variant
 
 db_path = Path('/home/mgisborne/Simulations/db/main.db')
 assert db_path.exists()
@@ -48,7 +48,6 @@ def mk_slurm_file(dir: Path,
                   ):
 
     assert dir.exists(), dir
-    assert queue in ('test', 'normal')
 
     tasks = tasks or CPU*nodes//OMP
     bindir = os.getenv('bindir')
@@ -123,38 +122,51 @@ def processname(name: str) -> dict:
     return data
 
 
-class Requied:
-    pass
-Requied = Requied()
-
-class Default:
-    pass
-Default = Default()
+Requied = object()
+Default = object()
 
 
 class Callback:
     def __init__(self, callback):
         self.callback = callback
 
-class Enum:
-    def __init__(self, *varients, name='Enum'):
-        self.vars = set(varients)
-        self.name = name
 
-    def __contains__(self, elem):
-        return elem in self.vars
+@Enum
+class yes_or_no:
+    yes: Scalar_Variant
+    no: Scalar_Variant
 
-    def __repr__(self):
-        return f'{self.name}({f", ".join(self.vars)})'
 
+@Enum
+class Queue_Type:
+    normal: Scalar_Variant
+    test: Scalar_Variant
+
+
+@Enum
+class System_Types:
+    PGP: Scalar_Variant
+    PGP_Mel: Scalar_Variant
+
+    def to_string(self):
+        match self:
+            case System_Types.PGP:
+                return 'PGP'
+            case System_Types.PGP_Mel:
+                return 'PGP-Mel'
+
+
+@Enum
+class XC_Type:
+    PBE: Scalar_Variant
 
 config_type = {'env': {'OMP': (int, 4),
                        'nodes': (int, Requied),
                        'root': ({str, PosixPath}, Requied),
-                       'queue': (Enum('normal', 'test'), 'normal'),
+                       'queue': (Queue_Type, Queue_Type.normal),
                        },
                'system': {
-                   'name': (Enum('PGP', 'PGD-Mel'), Requied),
+                   'name': (System_Types, Requied),
                    'atoms': (int, Requied),
                    'posinp': {'positions': (list, Requied),
                               'units': (str, Requied),
@@ -170,7 +182,7 @@ config_type = {'env': {'OMP': (int, 4),
                'algorithm': {
                    'configerations_id': (int, Requied),
                    'linear': (bool, True),
-                   'xc': (Enum('PBE'), 'PBE'),
+                   'xc': (XC_Type, XC_Type.PBE),
                    'convergence': {'gnrm':     (Callback(lambda v: (type(v) is float) or (v == 'default')), .01),
                                    'rpnrm': (Callback(lambda v: (type(v) is float) or (v == 'default')), 'default')},
                },
@@ -276,7 +288,7 @@ def mkinput(config):
     inp = {
         'dft': {'rmult': [config['space']['f'], config['space']['c']],
                 'hgrids': config['space']['h'],
-                'ixc': config['algorithm']['xc'],
+                'ixc': str(config['algorithm']['xc']),
                 'gnrm_cv': config['algorithm']['convergence']['gnrm'],
                 },
         'lin_general': {'rpnrm_cv': config['algorithm']['convergence']['rpnrm'],
@@ -300,7 +312,7 @@ def create_simulation(config: dict) -> Path:
     config = mkconfig(config).unwrap()
     input = mkinput(config)
 
-    name = config.get('name') or (
+    name = str(config.get('name')) or (
             formatname(OMP=config['env']['OMP'],
                        atoms=config['system']['atoms'],
                        # rmult=(config['space']['f'], config['space']['c']),
@@ -419,7 +431,6 @@ class Simulation:
         self.dir_written = True
         self.path = path
         return self
-
 
     def add_to_db(self):
         assert self.dir_written
