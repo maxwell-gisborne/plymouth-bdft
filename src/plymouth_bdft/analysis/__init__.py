@@ -10,7 +10,7 @@ from scipy.sparse import csc_matrix  # class for sparse matrix
 
 from plymouth_bdft.plotting_utils import plt, plot_points
 
-import plymouth_bdft.conductivity as conductivity
+import plymouth_bdft.analysis.conductivity as conductivity
 
 im = 0+1j
 
@@ -1030,4 +1030,3 @@ class BigDFT_Data:
         string.append(self.index_by_atoms.Symbols)
 
         return '\n'.join(map(str, string))
-
