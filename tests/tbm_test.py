@@ -18,13 +18,13 @@ def run_path():
 
 
 def test_imports(run_path):
-    from plymouth_bdft import BigDFT_Data
+    from plymouth_bdft.analysis import BigDFT_Data
     BigDFT_Data(data_dir = run_path.joinpath('data'))
 
 
 @pytest.fixture
 def new_data(run_path):
-    from plymouth_bdft import BigDFT_Data
+    from plymouth_bdft.analysis import BigDFT_Data
     return BigDFT_Data(data_dir = run_path.joinpath('data'))
 
 

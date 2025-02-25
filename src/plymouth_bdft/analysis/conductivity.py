@@ -3,13 +3,18 @@
 # How to exactly intergrate it with the above is also not fully worked out yet.
 
 import numpy as np
-
 from plymouth_bdft.immutiblenamespace import imns
 # from plotting_utils import plt, plot_points
 
+infinity = object()
 im = 0+1j
 
-rho_f = lambda beta, mu: lambda E: 1/(1 + np.exp(-(E - mu) * beta))
+rho_f = lambda beta, mu: lambda E:  (
+        E < mu
+        if beta is infinity else (
+            1/(1 + np.exp(-(E - mu) * beta))
+        )
+)
 
 
 @imns
@@ -29,27 +34,19 @@ class KSpace:
     mask: np.ndarray = None
     padding: (int, int) = (0, 0)
 
-    def ft(self, fk: np.ndarray) -> np.ndarray:
-        return 2*np.pi * np.fft.fft(fk) / np.sqrt(self.kx.shape[0] * self.ky.shape[0])
+    def partial_kx(kspace, F):
+        out = np.zeros_like(F)
+        out[1:, :]   = (F[1:, :] - F[:-1, :])/kspace.spacial_resolution[0]
+        out[:-1, :] += out[1:, :]
+        out[1:-1, :] /= 2
+        return out
 
-    def ift(self, fw: np.ndarray) -> np.ndarray:
-        return 2*np.pi * np.fft.ifft(fw) * np.sqrt(self.kx.shape[0] * self.ky.shape[0])
-
-    # TODO: validate unitarity of FT
-    def verify_unitarity_of_ft(self, test_function: np.ndarray):
-        return test_function - self.ift(self.ft(test_function))
-
-    def partial_kx(self, fk: np.ndarray) -> np.ndarray:
-        return np.real(self.ift(
-            np.einsum('ij,i->ij',
-                      self.ft(fk),
-                      self.wx * -im)))
-
-    def partial_ky(self, fk: np.ndarray) -> np.ndarray:
-        return np.real(self.ift(
-            np.einsum('ij,j->ij',
-                      self.ft(fk),
-                      self.wy * -im)))
+    def partial_ky(kspace, F):
+        out = np.zeros_like(F)
+        out[:,  1:]  = (F[:, 1:] - F[:, :-1])/kspace.spacial_resolution[1]
+        out[:, :-1] += out[:, 1:]
+        out[:, 1:-1] /= 2
+        return out
 
     def calculate_dule_space(self):
         return self(
@@ -79,10 +76,13 @@ class KSpace:
         who's Wigner-Sitz cell is there for a hexagon, a space k-space will be initialised, along with a mask
         that selects points inside that Wigner-Sites hexagon.'''
 
+        # width of the non-padded region is 2*B,
+        # density is thus 2B/N
+        # thus for M exstra points, with the same density, a padding width of 2B/N * M is requied
         B = 2/3*np.max(dule_vectors)
         Mx, My = padding
-        margin_x = B*Mx/N
-        margin_y = B*My/N
+        margin_x = 2*B*Mx/N
+        margin_y = 2*B*My/N
         xlinspace = np.linspace(-(B+margin_x), B, (N+Mx))
         ylinspace = np.linspace(-(B+margin_y), B, (N+My))
 
@@ -110,14 +110,15 @@ class KSpace:
             integrand = integrand[self.mask]
         return self.DK * np.sum(integrand)
 
-    def convolution_laplace(self, F: np.ndarray, l: float, direction=0):
+    def convolution_laplace(self, F: np.ndarray, l: float, direction=0, tol=None):
+        tol = tol or 1e-9
         assert direction == 0,  'not implemented y kdirecion'
         assert F.shape == (self.kx.shape[0], self.ky.shape[0]), (F.shape, (self.kx.shape[0], self.ky.shape[0]))
         N = self.padding[direction]
         M = self.kx.shape[direction] - N
         assert M > 0
         deltak = self.spacial_resolution[direction]
-        #  assert l*deltak*N >> 1
+        assert (_tol := np.exp(-l*deltak*N)) < tol, _tol
 
         # F3[a,b,c] = F[a-c,b]
         # F3 = np.lib.stride_tricks.as_strided(F, shape=(*F.shape, N), strides=(*F.strides, -F.strides[0]), writeable=False)
@@ -132,18 +133,35 @@ class KSpace:
                         b[None, :, None]
                     ]
                 ),
-                axis=-1)/deltak
-        result[N:, :] = 0
-        assert result.shape == (M, M), result.shape
+                axis=-1)*deltak
+        result[:N, :] = 0  # setting the padding to zero
+        assert result.shape == (M+N, M), result.shape
         return result
 
-    def k_mesh(self, ignore_padding=False) -> np.ndarray:
+    def k_mesh(self) -> np.ndarray:
         kx, ky = self.kx, self.ky
-        if ignore_padding:
-            kx = kx[self.padding[0]:]
-            ky = ky[self.padding[1]:]
-
         return np.array(np.meshgrid(kx, ky)).transpose([2, 1, 0])
+
+    def padding_mask(self) -> np.ndarray:
+        Nx = self.kx.shape[0]
+        Ny = self.ky.shape[0]
+        Px, Py = self.padding
+        padding_mask = np.ones((Nx, Ny), bool)
+        padding_mask[np.arange(Nx) < Px] = False
+        padding_mask[:, np.arange(Ny) < Py] = False
+        assert np.sum(padding_mask) == (Nx-Px)*(Ny-Py)
+
+        def apply(mesh: np.ndarray):
+            if len(mesh.shape) == 2:
+                return mesh[padding_mask].reshape(Nx-Px, Ny-Py)
+            if len(mesh.shape) == 3:
+                return mesh[padding_mask].reshape(Nx-Px, Ny-Py, mesh.shape[2])
+            if len(mesh.shape) == 1:
+                assert mesh.shape[0] == Nx * Ny, mesh.shape[0]
+                return self.reshape_points_to_mesh(mesh)[padding_mask]
+            raise Exception('Not Implemented', mesh.shape)
+
+        return apply
 
     def reshape_mesh_to_points(self, mesh: np.ndarray) -> np.ndarray:
         return mesh.reshape(self.Nx*self.Ny, -1)
@@ -160,13 +178,21 @@ class KSpace:
         assert self.k_mesh().shape == (self.Nx, self.Ny, 2)
         return self
 
-    def plot_k_points(self, ax=None):
+    def plot_k_points(self, ignore_padding=True, ax=None):
         if ax is None:
             import matplotlib.pyplot as plt
             _, ax = plt.subplots()
 
-        ax.scatter(*self.k_mesh().transpose(), s=.2, label='points outside mask')
-        ax.scatter(*self.k_mesh()[self.mask].transpose(), s=.3, label='points inside mask')
+        mesh = self.k_mesh()
+        all_points = mesh
+        bz1 = mesh[self.mask]
+        if ignore_padding:
+            apply_padding_mask = self.padding_mask()
+            all_points = apply_padding_mask(all_points)
+            bz1 = all_points[apply_padding_mask(self.mask)]
+
+        ax.scatter(*all_points.transpose(), s=.2, label='points outside mask')
+        ax.scatter(*bz1.transpose(), s=.3, label='points inside mask')
 
         ax.set_aspect(1)
         ax.set_title('K-points')
@@ -174,25 +200,111 @@ class KSpace:
 
         return ax
 
-    def plot_over_k(self, F, ax=None, ignore_padding=False, **plot_args):
+    def plot_over_k(self, F, ax=None, ignore_padding=True, **plot_args):
+        plot_args['cmap'] = plot_args.get('cmap', 'inferno')
         if ax is None:
             import matplotlib.pyplot as plt
             _, ax = plt.subplots()
 
-        ax.scatter(*self.k_mesh(ignore_padding=ignore_padding).transpose([2, 0, 1]), c=F, **plot_args)
+        mesh = self.k_mesh()
+        if ignore_padding:
+            apply_mask = self.padding_mask()
+            mesh = apply_mask(mesh)
+            F = apply_mask(F)
+
+        # ax.scatter(*mesh.transpose([2, 0, 1]), c=F, **plot_args)
+        pcm = ax.pcolormesh(*mesh.transpose([2, 0, 1]), F, **plot_args)
+        ax.figure.colorbar(pcm, ax=ax)
         return ax
+
+
+@imns
+class Units:
+    tau: float
+    hbar: float
+    e: float
+    me: float
+    four_pi_epsilon: float
+    bolzman: float
+
+    seconds: float
+    meters: float
+    jules: float
+    kg: float
+    volts: float
+    amps: float
+
+    au_time: float
+    au_current: float
+    hatrees: float
+    bhor: float
+
+    def beta(self, T):
+        return infinity if T == 0 else 1/(self.bolzman * T)
+
+
+SI = Units(
+    tau = 17e-12,  # https://arxiv.org/pdf/1712.08965
+    hbar = 6.626e-34 / (2*np.pi),
+    e = 1.602e-19,
+    me = 9.109e-31,
+    four_pi_epsilon = 1.113e-10,
+    bolzman = 1.3e-23,
+
+    seconds = 1,
+    meters = 1,
+    jules = 1,
+    kg = 1,
+    volts = 1,
+    amps = 1,
+
+
+    au_time = None,
+    au_current = None,
+    hatrees = None,
+    bhor = None,
+)
+
+SI = SI(bhor = SI.four_pi_epsilon * SI.hbar**2 / (SI.me * SI.e**2))
+SI = SI(hatrees = SI.hbar**2 / (SI.me * SI.bhor**2))
+SI = SI(au_time = SI.hbar / SI.hatrees)
+SI = SI(au_current = SI.e * SI.hatrees / SI.hbar)
+
+
+AU = Units(
+    tau = SI.tau / SI.au_time,
+    hbar = 1,
+    e = 1,
+    me = 1,
+    four_pi_epsilon = 1,
+    bolzman = SI.bolzman / SI.hatrees,
+
+    seconds = 1/SI.au_time,
+    meters = 1/SI.bhor,
+    jules = 1/SI.hatrees,
+    kg = 1/SI.me,
+    volts = SI.hatrees / SI.e,
+    amps = 1/SI.au_current,
+
+    au_time = 1,
+    hatrees = 1,
+    bhor = 1,
+    au_current = 1,
+)
 
 
 @imns
 class Classical_Conductivity:
     Energy: np.ndarray = None
-    hbar: float = 1
-    e: float = 1
+    units: Units = AU
+
     kspace: KSpace = None
-    tau: float = 1
     EField: np.ndarray = lambda: np.array([1, 0])
     kernel_factor: np.ndarray = None
     sigma: np.ndarray = None
+
+    Temp: float = 293  # 19.8 C in kelvin
+    mu: float = 0  # fermi-level
 
     def init_kspace(self, **kwargs):
         return self(
@@ -202,69 +314,34 @@ class Classical_Conductivity:
                           )
         )
 
-    def plot_fermi_distribution(self, beta=1, mu=0, **plot_args):
-        return self.kspace.plot_over_k(rho_f(beta, mu)(self.Energy), **plot_args)
+    def plot_fermi_distribution(self, **plot_args):
+        kT = self.Temp*self.units.bolzman
+        return self.kspace.plot_over_k(rho_f(1/kT, self.mu)(self.Energy), **plot_args)
 
     def calculate_kernel_factor(self):
         ''' Z(wx, wy) = 1/(1+1im*(τ*e/hbar)*(wx*Efield_x + wy*Efield_y))
             kernel_factor(wx, wy) = 1im*(e^2 * τ)/(hbar^2) .* (Z.(wx, wy)).^2 '''
 
-        Zinv = 1 + im * (self.tau * self.e / self.hbar) * (
+        Zinv = 1 + im * (self.units.tau * self.units.e / self.units.hbar) * (
                 (self.kspace.wx * self.EField[0])[:, np.newaxis] +
                 (self.kspace.wy * self.EField[1])[np.newaxis, :]
         )  # indicies read [x][y]
 
-        kf = im * self.e**2 * self.tau * self.hbar**-2 * Zinv**-2
+        kf = im * self.units.e**2 * self.units.tau * self.units.hbar**-2 * Zinv**-2
 
         return self(kernel_factor = kf)
 
-    def calculate_rho(self, l=1):
+    def calculate_rho(self, E=1, tol=None):
+        l = self.units.hbar / self.units.e / self.units.tau / E
         return self.kspace.convolution_laplace(
-                self.kspace.reshape_points_to_mesh(self.Energy)[:, :, 0],
-                l=l)
+                self.kspace.reshape_points_to_mesh(rho_f(self.units.beta(self.Temp), self.mu)(self.Energy))[:, :, 0],
+                l=l,
+                tol=tol)
 
-    def calculate_conductivity(self):
-        ''' ∂Ekx = ∂kx(E.(kx, ky))
-            ∂Eky = ∂ky(E.(kx, ky))
+    def calculate_current(self, E=1, tol=None):
+        return - self.units.e * self.kspace.partial_kx(self.Energy) * self.calculate_rho(E=E, tol=tol)
 
-            KF = kernel_factor.(wx, wy)
-            KF_kx = KF .* wx |> ift
-            KF_ky = KF .* wy |> ift
-
-            σ_11 = -1*Δk*sum( ∂Ekx .* KF_kx )
-            σ_12 = -1*Δk*sum( ∂Ekx .* KF_ky )
-            σ_21 = -1*Δk*sum( ∂Eky .* KF_kx )
-            σ_22 = -1*Δk*sum( ∂Eky .* KF_ky )
-
-            return [σ_11 σ_21; σ_12 σ_22]'''
-
-        partial_Ekx = self.kspace.partial_kx(self.Energy)
-        partial_Eky = self.kspace.partial_ky(self.Energy)
-
-        KF_kx = self.kspace.ift(np.einsum('xy,x -> xy', self.kernel_factor, self.kspace.wx))
-        KF_ky = self.kspace.ift(np.einsum('xy,y -> xy', self.kernel_factor, self.kspace.wy))
-
-        sigma = np.zeros((2, 2))
-        sigma[0, 0] = -1 * self.kspace.integrate(partial_Ekx * KF_kx)
-        sigma[0, 1] = -1 * self.kspace.integrate(partial_Ekx * KF_ky)
-        sigma[1, 0] = -1 * self.kspace.integrate(partial_Eky * KF_kx)
-        sigma[1, 1] = -1 * self.kspace.integrate(partial_Eky * KF_ky)
-
-        return self(sigma = sigma)
-
-    def integrate_against_kernel(self, Fk: np.ndarray):
-        # TODO: I'm not yet sure how this should work, because ive not written the alternative
-        # this calculates the kernel F_w^(-k) { 1/(1+i tau e /hbar E w) }
-        # and integrates it agsint a given function
-        # this is equal to
-        # 2pi hbar/ etau 1/|E| exp(-hbar/etau k_||) theta(k_||) theta(k_||) delta(k_|-)
-        # due to the delta, im going to comp
-
-        # If I rotate the space .... oh my god I should be using fft to do this, but that removes the whole point.
-
-        Enorm = np.linalg.norm(self.EField)
-        Ehat = self.EField/Enorm
-        kpp = np.array([Ehat[0] * self.kx,   Ehat[1]*self.ky])  # k parallel part
-        kop = np.array([Ehat[1] * self.kx, - Ehat[0]*self.ky])  # k othogonal part
-        lam = self.hbar / (self.e * self.tau * Enorm)
-        self.convole(Fk)
+    def calculate_conductivity(self, l=1):
+        return self(
+                sigma = 0
+        )

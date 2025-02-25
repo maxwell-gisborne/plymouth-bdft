@@ -530,6 +530,7 @@ class BigDFT_Data:
     def calculate_FT(self, k_points: np.ndarray, append=False):
         '''This function finds the furier transform of the reduced hamiltonion and S-matrix onto the k-points provided.'''
         assert self.tags['calculated_Reduced_Hamiltonian']
+        
 
         N_KPs = k_points.shape[0]
 
@@ -560,6 +561,8 @@ class BigDFT_Data:
                     S_K = np.concatenate((self.index_by_cc.S_K, S), axis=2),
                     SinvH_K = np.concatenate((self.index_by_cc.SinvH_K, SinvH), axis=2),
                     k_points = np.concatenate((self.index_by_cc.k_points, k_points), axis=1),
+                    Bands = None,
+                    States = None,
                 ),
                 tags = self.tags | {'calculated_dTBH': False, 'calculated_DOS': False}
             )
@@ -570,6 +573,8 @@ class BigDFT_Data:
                         S_K = S,
                         SinvH_K = SinvH,
                         k_points = k_points,
+                        Bands = None,
+                        States = None,
                      ),
                 tags = self.tags | {'calculated_FT': True, 'calculated_dTBH': False, 'calculated_DOS': False}
                  )
@@ -613,18 +618,14 @@ class BigDFT_Data:
             2) calculating the tight binding hamiltonian along that path, and 3) diagonalising that TBH.
             returning the result'''
 
-        print(controll_points)
         if issubclass(dict, type(controll_points)):
-            print('its a dict')
             labels = list(controll_points)
             controll_points = list(controll_points.values())
             print(labels)
         else:
-            print('its not a dict')
             labels = None
 
         if not issubclass(np.ndarray, type(controll_points)):
-            print('lets turn it into an arry')
             controll_points = np.array(controll_points)
 
         kpoints, cp_offsets = self.geometry.dule_space_interpolate(controll_points, delta=delta)
@@ -760,7 +761,7 @@ class BigDFT_Data:
 
         return self(
                 conds = conds,
-                dos = self.dos,
+                dos = self.dos, # this looks redundent
                 tags = self.tags | {'calculated_conductivity': True}
         )
 
@@ -993,12 +994,18 @@ class BigDFT_Data:
         ax.figure.legend()
         return ax
 
+    def display(self):
+        print(self)
+        return self
+
     def __repr__(self):
         tags = self.tags
         width = max([len(tag) for tag in tags]) + 5
         title_line = f'''{self.__class__.__qualname__}'''
         title_line += '\n' + '-' * len(title_line) + '\n'
-        return (title_line + f'''data_dir = "{self.data_dir}",\n\t'''
+        return (title_line
+                + f'units = {self.units.name}\n'
+                + f'''data_dir = "{self.data_dir}",\n\t'''
                 + '\n\t'.join([str(tag).rjust(width) + f':\t[{status}]' for tag, status in self.tags.items()])
                 + ('\n COMMENTS:\n\t' + '\n\t'.join([str(c) for c in self._comments])
                    if len(self._comments) != 0 else '')
@@ -1030,3 +1037,10 @@ class BigDFT_Data:
         string.append(self.index_by_atoms.Symbols)
 
         return '\n'.join(map(str, string))
+
+    def check_point(self, msg='checkpoint'):
+        print(msg)
+        return self
+
+def foo():
+    return foo
