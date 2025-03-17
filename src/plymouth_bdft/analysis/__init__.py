@@ -201,6 +201,8 @@ Optional = lambda: None
 class Units:
     E: float
     L: float
+    e: float
+    hbar: float
     name: str
     comment: str = ""
 
@@ -210,12 +212,16 @@ class Units:
 
 AU = Units(E = 1,
            L = 1,
+           e = 1,
+           hbar = 1,
            name = 'bhor',
            comment = "this is the unit on disk")
 
 eVag = Units(
-        E = 27.21138386,  # AU to eV
-        L = 0.52917721092,  # Au to Ang
+        E = 27.21138386,  # Hatrees in eV
+        L = 0.52917721092,  # bhor radius in to Angstroms
+        e = 1.602e-19,      # charge on electron in Colombs
+        hbar = 6.582e-16,  # hbar in eV•s
         name = 'angstroem',
         )
 
@@ -233,7 +239,7 @@ class BigDFT_Data:
     index_by_sl:    Index_by_Sublattice       = Optional
     index_by_cc:    Index_by_Compound_Channel = Optional
     dos: DOS = Optional
-    conds: [conductivity.Classical_Conductivity] = None
+    conds: [conductivity.Classical] = None
     _comments: list = lambda: list()
     Rmod: np.ndarray = None
     units: Units = eVag
@@ -703,16 +709,16 @@ class BigDFT_Data:
             tags = self.tags | {'calculated_dTBH': True},
         )
 
-    def init_kspace(self, N: int, padding=None):
+    def into_kspace(self, N: int, padding=None, transform=lambda x:x):
         if padding is None:
             padding = (0, 0)
 
         assert self.tags['calculated_center']
-        kspace = conductivity.KSpace().init_with_hex(self.geometry.bi, N, padding)
+        kspace = conductivity.KSpace.Primitive_Grid(*transform(self.geometry.bi), N)
         return self(
                 kspace = kspace,
                 tags = self.tags | {'initialized_kspace': True},
-        ).calculate_FT(kspace.reshape_mesh_to_points(kspace.k_mesh())).diagonalise_TBH()
+        ).calculate_FT(kspace.grid_to_array(kspace.sample_points())).diagonalise_TBH()
 
     def calculate_dos(self, number=300, alpha = None, gamma=.5):
         assert self.tags['calculated_dTBH']
@@ -721,10 +727,8 @@ class BigDFT_Data:
         energy_samples = self.index_by_cc.Bands
 
         assert energy_samples.shape[0] == 8, energy_samples.shape
-        mask = self.kspace.mask.reshape(*energy_samples.shape[1:])
 
-        energy_samples = energy_samples[:, mask]
-        assert np.prod(energy_samples.shape) < np.prod(self.index_by_cc.Bands.shape)
+        # assert np.prod(energy_samples.shape) < np.prod(self.index_by_cc.Bands.shape)
 
         energy_samples = energy_samples.reshape(-1)
 
@@ -745,23 +749,17 @@ class BigDFT_Data:
 
     def calculate_conductivity(self):
         assert self.kspace is not None
-        assert self.tags['calculated_dTBH'], 'try initialising kspace with the `.init_kspace(N)` method'
-
-        kspace = self.kspace
-
-        conds = []
-        for band in self.index_by_cc.Bands:
-            energies = kspace.reshape_points_to_mesh(band)[:, :, 0]
-            conds.append(conductivity.Classical_Conductivity(
-                kspace=kspace,
-                Energy=energies)
-                         .calculate_kernel_factor()
-                         .calculate_conductivity()
-                     )
-
+        assert self.tags['calculated_dTBH'], 'try initialising kspace with the `.into_kspace(N)` method'
         return self(
-                conds = conds,
-                dos = self.dos, # this looks redundent
+                conds = [
+                    conductivity.Classical(
+                        kspace = self.kspace,
+                        energy = self.kspace.array_to_grid(band),
+                        mu = self.units.E, beta = 1,
+                        eoverhbar = self.units.e / self.units.hbar,
+                    ) for band in self.index_by_cc.Bands
+                ],
+                # dos = self.dos, # this looks redundent
                 tags = self.tags | {'calculated_conductivity': True}
         )
 
@@ -977,7 +975,7 @@ class BigDFT_Data:
 
         for N, gamma in points:
             calc_N  = (self
-                       .init_kspace(N)
+                       .into_kspace(N)
                        .verify_geometry()
                        .calculate_dos(gamma=gamma)
                        )
@@ -996,6 +994,10 @@ class BigDFT_Data:
 
     def display(self):
         print(self)
+        return self
+
+    def print(self, *args, **kwargs):
+        print(*args, **kwargs)
         return self
 
     def __repr__(self):
