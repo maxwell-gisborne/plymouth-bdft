@@ -103,6 +103,14 @@ class KSpace:
         return ax
 
 
+def assert_norm(vec):
+    assert (vec @ vec - 1)**2 < 1e-20, ('exspected normalised vector', vec @ vec)
+
+def wrap_inplace(n:np.ndarray, M:int):
+    n[n>=0] = n[n>=0] % M
+    n[n<0] = (M - np.abs(n[n<0]) % M) % M
+
+
 @imns
 class llc_config:
     l: float = None # charicteristic length 
@@ -116,29 +124,43 @@ class llc_config:
     input_kspace: KSpace = None #  input mesh, bi
     output: ndarray = None # computed output llc
 
-    def pullback(self, signal, domain, target, points,  shift=array([0,0])):
+    def pullback(self, signal, domain, target, coords, shift=array([0,0])):
+
         NF = signal.shape[0]
         J = linalg.inv(domain.transpose()) @ target.transpose()
-        mapped = np.einsum('ij,abcj->iabc', J, points) - shift[:,None,None,None]
-    
+        if not np.all(np.abs(J - np.eye(*J.shape)) < 1e-9):
+            print('WARN: J is not identity. J = ')
+            print(J)
+            print('Perhaps the target and domain are not the same?')
+            print('Domain: ')
+            print(domain)
+            print('Target: ')
+            print(target)
+        mapped = np.einsum('ij,abcj->iabc', J, coords) - shift[:,None,None,None]
         upper = np.ceil(mapped).astype('int')
-        upper[upper >= NF] = upper[upper >= NF] % NF
-        upper[upper < 0] = (NF - np.abs(upper[upper < 0]) % NF) % NF
-    
         lower = np.floor(mapped).astype('int')
-        lower[lower >= NF] = lower[lower >= NF] % NF
-        lower[lower < 0] = (NF - np.abs(lower[lower < 0]) % NF) % NF
-
+        wrap_inplace(mapped, NF)
+        wrap_inplace(upper, NF)
+        wrap_inplace(lower, NF)
         alpha, beta = mapped % 1
-    
+
+        # print('INFO: pullback interpolation disabled')
+        # alpha = 1
+        # beta = 1
+
         return ( alpha     * beta     * signal[upper[0], upper[1]]
                + (1-alpha) * beta     * signal[lower[0], upper[1]]
                + alpha     * (1-beta) * signal[upper[0], lower[1]]
                + (1-alpha) * (1-beta) * signal[lower[0], lower[1]] )
 
+
     def compute(self):
         M = self.M
+        N = self.N
         L = self.L
+        assert self.Ehat @ self.Ehat_perp < 1e-14, self.Ehat @ self.Ehat_perp
+        assert_norm(self.Ehat)
+        assert_norm(self.Ehat_perp)
 
         segment_offsets = [
                 self.Ehat_perp @ self.input_kspace.b1,
@@ -147,9 +169,12 @@ class llc_config:
 
         lower_so = abs(min(segment_offsets))
         upper_so = abs(max(segment_offsets))
-        sum_so = lower_so + upper_so
-        segment_domain = array([L*self.Ehat, sum_so*self.Ehat_perp])
-        primitive_domain =  array([self.input_kspace.b1,self.input_kspace.b2])
+        L_perp= lower_so + upper_so
+        seg_shift = lower_so/L_perp
+        segment_domain = array([L*self.Ehat/M, L_perp*self.Ehat_perp/M])
+        primitive_domain =  array([self.input_kspace.b1/N, self.input_kspace.b2/N])
+
+        seg_shift = 1
 
         m = arange(M)
         m1 = m[:,None,None]
@@ -160,25 +185,29 @@ class llc_config:
         x,y = np.eye(2)
 
         for segment_number in range(self.Sg):
-            expt = np.exp(L*(m1/M -m3/M - segment_number))
-            zero_segment[:,:] += np.sum(self.pullback(
+            expt = np.exp(self.l*L*(m1/M -m3/M - segment_number))
+            expt[expt > 1] = 0
+            
+            nupb = self.pullback(
                 signal = self.nu,
                 domain = primitive_domain,
                 target = segment_domain,
-                points = x*(m1-m3-segment_number*M)[:,:,:,None] + y*(m2 - lower_so/sum_so*M)[:,:,:,None],
-            )*expt, axis=2)
+                coords = x*((m1-m3)-segment_number*M)[:,:,:,None] + y*(m2 - seg_shift*M)[:,:,:,None]
+            )
+            zero_segment[:,:] += np.sum(nupb*expt, axis=2)
 
 
-        output = np.zeros((self.N, self.N))
-        n = arange(self.N)
+        output = np.zeros((N,N))
+        n = arange(N)
         n1 = n[:,None,None,None]
         n2 = n[None,:,None,None]
         output = self.pullback(
             signal = zero_segment,
             domain = segment_domain,
             target = primitive_domain,
-            points = x*n1 + y*n2,
+            coords = x*n1/N + y*n2/N,
         )[:,:,0]
+
         return self(
             output = output * 2*np.pi*(-np.expm1(-self.l*L/M))
         )
