@@ -548,6 +548,8 @@ class BigDFT_Data:
         # TODO: replace the following with an fft library routine.
         # this requies k_points to be provided as linspace config
         # as opposed to a set of points, this may complicate DOS calculations.
+        #
+        # can write a Cfunction to compute this to save time
 
         for B1 in self.index_by_cc.range:
             for B2 in self.index_by_cc.range:
@@ -709,12 +711,9 @@ class BigDFT_Data:
             tags = self.tags | {'calculated_dTBH': True},
         )
 
-    def into_kspace(self, N: int, padding=None, transform=lambda x:x):
-        if padding is None:
-            padding = (0, 0)
-
+    def into_kspace(self, N: int):
         assert self.tags['calculated_center']
-        kspace = conductivity.KSpace.Primitive_Grid(*transform(self.geometry.bi), N)
+        kspace = conductivity.KSpace.Primitive_Grid(*self.geometry.bi, N)
         return self(
                 kspace = kspace,
                 tags = self.tags | {'initialized_kspace': True},
@@ -747,16 +746,18 @@ class BigDFT_Data:
                 tags = self.tags | {'calculated_DOS': True},
         )
 
-    def calculate_conductivity(self):
+    def calculate_conductivity(self, M, S_g = 100):
         assert self.kspace is not None
         assert self.tags['calculated_dTBH'], 'try initialising kspace with the `.into_kspace(N)` method'
         return self(
                 conds = [
                     conductivity.Classical(
-                        kspace = self.kspace,
-                        energy = self.kspace.array_to_grid(band),
-                        mu = self.units.E, beta = 1,
-                        eoverhbar = self.units.e / self.units.hbar,
+                            M = M,
+                            kspace = self.kspace, #.sample_points(),
+                            energy = self.kspace.array_to_grid(band),
+                            mu = self.units.E, beta = 1,
+                            eoverhbar = self.units.e / self.units.hbar,
+
                     ) for band in self.index_by_cc.Bands
                 ],
                 # dos = self.dos, # this looks redundent
@@ -975,7 +976,7 @@ class BigDFT_Data:
 
         for N, gamma in points:
             calc_N  = (self
-                       .into_kspace(N)
+                       .into_kspace(N=N)
                        .verify_geometry()
                        .calculate_dos(gamma=gamma)
                        )

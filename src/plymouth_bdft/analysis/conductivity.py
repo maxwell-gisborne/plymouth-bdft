@@ -1,10 +1,7 @@
-# Warnning: None of the following has been tested,
-# Its likey it doesnt even run properly
-# How to exactly intergrate it with the above is also not fully worked out yet.
-
 import numpy as np
 from numpy import linalg, ndarray, array, arange
 from plymouth_bdft.immutiblenamespace import imns
+from dataclasses import dataclass
 
 def rombus_area(b0,b1):
     # area = |b0||b1|sqrt(1 - ((b0 dot b1)/(|b0||b1|)) ^2 )
@@ -111,168 +108,155 @@ def wrap_inplace(n:np.ndarray, M:int):
     n[n<0] = (M - np.abs(n[n<0]) % M) % M
 
 
-@imns
-class llc_config:
-    l: float = None # charicteristic length 
-    Ehat: ndarray = None # float[2], direction of applied electric field 
-    Ehat_perp: ndarray = None # float[2] perpendicular direction
-    L: float = None # segmentation length
-    N: int = None # primitive grid number
-    M: int = None # segment grid number
-    Sg: int = None # segments number
-    nu: ndarray = None # input density
-    input_kspace: KSpace = None #  input mesh, bi
-    output: ndarray = None # computed output llc
 
-    def pullback(self, signal, domain, target, coords, shift=array([0,0])):
+def eq_1_8_9_varable_angle(nu, E, Ep, bs, M=None, l=1, S_g=8):
+    'tested notebooks/scripts/independent_integral_test.py with pijul hash 4DV3ENCQH3ZV5WMK2KUV47LW7ZHUQJFGLEF5P4FLVFLVYLPYTQ4QC'
+    N = nu.shape[0]
+    M = M or 2*N
+    assert nu.shape == (N,N), nu.shape
+    m = np.arange(M)
+    _1 = (slice(M),None, None)
+    _2 = (None, slice(M),None)
+    _3 = (None, None, slice(M))
 
-        NF = signal.shape[0]
-        J = linalg.inv(domain.transpose()) @ target.transpose()
-        if not np.all(np.abs(J - np.eye(*J.shape)) < 1e-9):
-            print('WARN: J is not identity. J = ')
-            print(J)
-            print('Perhaps the target and domain are not the same?')
-            print('Domain: ')
-            print(domain)
-            print('Target: ')
-            print(target)
-        mapped = np.einsum('ij,abcj->iabc', J, coords) - shift[:,None,None,None]
-        upper = np.ceil(mapped).astype('int')
-        lower = np.floor(mapped).astype('int')
-        wrap_inplace(mapped, NF)
-        wrap_inplace(upper, NF)
-        wrap_inplace(lower, NF)
-        alpha, beta = mapped % 1
+    def wrap(n, NF):
+        n[n>=0] = n[n>=0] % NF
+        n[n<0] = (NF - np.abs(n[n<0]) % NF ) % NF
+        return n
 
-        # print('INFO: pullback interpolation disabled')
-        # alpha = 1
-        # beta = 1
+    a1,a2 = np.linalg.inv(bs).transpose() # a1 dot b1 = 1, b1 dot b2 = 0
+    aE = [a1@E, a2@E]
+    aEp = [a1@Ep, a2@Ep] 
 
-        return ( alpha     * beta     * signal[upper[0], upper[1]]
-               + (1-alpha) * beta     * signal[lower[0], upper[1]]
-               + alpha     * (1-beta) * signal[upper[0], lower[1]]
-               + (1-alpha) * (1-beta) * signal[lower[0], lower[1]] )
+    b1,b2 = bs
+    bE = [b1@E, b2@E]
+    bEp = [b1@Ep, b2@Ep]
 
 
-    def compute(self):
-        M = self.M
-        N = self.N
-        L = self.L
-        assert self.Ehat @ self.Ehat_perp < 1e-14, self.Ehat @ self.Ehat_perp
-        assert_norm(self.Ehat)
-        assert_norm(self.Ehat_perp)
+    lower_so = abs(min(*bEp))
+    upper_so = abs(max(*bEp))
 
-        segment_offsets = [
-                self.Ehat_perp @ self.input_kspace.b1,
-                self.Ehat_perp @ self.input_kspace.b2
-        ]
+    L = np.linalg.norm(b1)
+    Lp = lower_so + upper_so
+    shift = lower_so/Lp
 
-        lower_so = abs(min(segment_offsets))
-        upper_so = abs(max(segment_offsets))
-        L_perp= lower_so + upper_so
-        seg_shift = lower_so/L_perp
-        segment_domain = array([L*self.Ehat/M, L_perp*self.Ehat_perp/M])
-        primitive_domain =  array([self.input_kspace.b1/N, self.input_kspace.b2/N])
+    zero_segment = np.zeros((M,M))
+    for s in range(S_g):
+        print(f'{s}/{S_g}', end='\r')
+        n1, n2 = (N/M * aE[i] * L * ((m[_1]-m[_3]) - s * M) +  N/M * aEp[i] * Lp * (m[_2] - shift * M) for i in (0,1))
+        n1 = wrap(np.round(n1).astype('int'), N)
+        n2 = wrap(np.round(n2).astype('int'), N)
 
-        seg_shift = 1
+        zero_segment += np.sum(nu[n1,n2] * np.exp(-l*L*(m[_3]/M + s)), axis=-1)
 
-        m = arange(M)
-        m1 = m[:,None,None]
-        m2 = m[None,:,None]
-        m3 = m[None,None,:]
-
-        zero_segment = np.zeros((M,M))
-        x,y = np.eye(2)
-
-        for segment_number in range(self.Sg):
-            expt = np.exp(self.l*L*(m1/M -m3/M - segment_number))
-            expt[expt > 1] = 0
-            
-            nupb = self.pullback(
-                signal = self.nu,
-                domain = primitive_domain,
-                target = segment_domain,
-                coords = x*((m1-m3)-segment_number*M)[:,:,:,None] + y*(m2 - seg_shift*M)[:,:,:,None]
-            )
-            zero_segment[:,:] += np.sum(nupb*expt, axis=2)
+    zero_segment *= 2 * np.pi * (-np.expm1(-l*L/M))
 
 
-        output = np.zeros((N,N))
-        n = arange(N)
-        n1 = n[:,None,None,None]
-        n2 = n[None,:,None,None]
-        output = self.pullback(
-            signal = zero_segment,
-            domain = segment_domain,
-            target = primitive_domain,
-            coords = x*n1/N + y*n2/N,
-        )[:,:,0]
+    _1 = (slice(M), None)
+    _2 = (None, slice(M))
 
-        return self(
-            output = output * 2*np.pi*(-np.expm1(-self.l*L/M))
-        )
+    n1, n2 = (N/M * aE[i] * L * m[_1] +  N/M * aEp[i] * Lp * (m[_2] - shift * M) for i in (0,1))
+    n1 = wrap(np.round(n1).astype('int'), N)
+    n2 = wrap(np.round(n2).astype('int'), N)
+    out = np.zeros((N,N))
+    out[n1,n2] = zero_segment[m[_1],m[_2]]
 
-    def plot(self,ax=None):
-        return self.input_kspace.plot_over_sample_grid(self.output)
-
-               
-def llc(kspace, signal, l, N, area, axis):
-    'calclates f(t) = l*L_s^l {f(t-s)}'
-    'I need to change this function to be a propper sum (i waisted my time on it so far and just lost another week)'
-    a = b = c = arange(N)
-    if axis == 0:
-        X = a[:,None,None] - c[None,None,:]
-        Y = b[None,:,None]
-    else:
-        X = a[:,None,None]
-        Y = b[None,:,None] - c[None,None,:]
-
-    #kprime = n[:,None]/N * axis[None,:]
-    #kernel = np.exp(-l*kprime)
-    kernel = np.exp(-l*np.einsum('i,pi->p',axis,kspace))
-    # kprime -> A,B index offsets
-    # then sample X = a - A, Y = b - B with appropreate index offsets
-    out = np.zeros_like(signal)
-
-#    return - area * * np.expm1(-lbnorm/N) * np.sum(kernel[None,None,:] * signal[X,Y], axis=-1)
+    # return Eq_Output(
+    #     Eq = "1.8.9 variable angle",
+    #     perams=dict(M=M, N=N, l=l, L=L, Lp=Lp, shift=shift, S_g=S_g),
+    #     out = out,
+    #     )
+     
     return out
 
 
+@dataclass
 class Classical:
-    _id = [0]
+    M: int
+    kspace: KSpace
+    energy: np.ndarray
+    rho: np.ndarray = None
+    eoverhbar: float = 1.0
+    beta: float = 1.0
+    mu: float = 1.0
    
-    def __init__(self, kspace:KSpace, energy:ndarray, M, eoverhbar = 1, beta = 1, mu = 1 ):
-        self._id[0] += 1
-        self.id = self._id[0]
+    def calculate_rho(self, l, M=None, S_g = 10, theta = None):
+        b1 = self.kspace.b1
+        b2 = self.kspace.b2
 
-        self.kspace = kspace
-        self.energy = energy
-        self.eoverhbar = 1
-        self.beta = 1
-        self.mu = 1
+        if theta is None:
+            theta = np.log(np.complex128(*b1)).imag
 
-        self.velocity = [lambda: self.kspace.partial_1(self.energy), lambda: self.kspace.partial_2(self.energy)]
+        i,j = np.eye(2)
+        E  =  np.cos(theta)*i + np.sin(theta)*j
+        Ep = -np.sin(theta)*i + np.cos(theta)*j
+        rho = eq_1_8_9_varable_angle(
+            nu = 1/(1+np.exp(- self.beta * (self.energy - self.mu))),
+            E = E, 
+            Ep = Ep,
+            bs = np.array([b1,b2]),
+            M = M,
+            l = l,
+            S_g = S_g,
+        )
+        return rho
 
-        self.charge_density = [(lambda Ehat:
-                        lambda l: 2*np.pi * llc(
-                            signal = 1/(1+np.exp(-self.beta*(self.energy - self.mu))),
-                            lbnorm = l*[linalg.norm(self.kspace.b1), linalg.norm(self.kspace.b2)][Ehat],
-                            area = self.kspace.A,
-                            N = [self.kspace.N1, self.kspace.N2][Ehat],
-                            axis=Ehat))(Ehat) for Ehat in [0,1]]
+    def calculate_j(self, l, M = None, S_g = 10, theta = None):
+        b1 = self.kspace.b1
+        b2 = self.kspace.b2
+        BZ_area =  np.sqrt((np.linalg.norm(b1)*np.linalg.norm(b2))**2 - (b1 @ b2)**2)
 
-        self.current_densities = [(lambda Jhat: [(lambda Ehat:
-                        lambda l: - self.eoverhbar * self.charge_density[Ehat](l) * self.velocity[Jhat]()
-                            )(Ehat) for Ehat in [0,1]]
-                            )(Jhat) for Jhat in [0,1]]
+        ep_p1 = self.kspace.partial_1(self.energy)
+        ep_p2 = self.kspace.partial_2(self.energy)
 
-        self.currents = [(lambda Jhat: [(lambda Ehat:
-                        lambda l: self.kspace.integrate(self.current_densities[Jhat][Ehat](l))
-                            )(Ehat) for Ehat in [0,1]]
-                            )(Jhat) for Jhat in [0,1]]
+        rho = self.calculate_rho(l=l, M=M, S_g=S_g, theta=theta)
 
-        def __repr_(self):
-            return f'Classical_Conductivity(id=${self.id})'
+        j1 = - self.eoverhbar * BZ_area * np.average(ep_p1 * rho)
+        j2 = - self.eoverhbar * BZ_area * np.average(ep_p2 * rho)
+
+        jx, jy = b1 * j1 + b2 * j2
+        return jx, jy
+
+    def calculate_js(self, Etaus: np.ndarray, M = None, S_g = 10, theta=None):
+        #Etaus = np.concat([np.linspace(0, (5e-2)-(1e-5))[1:], np.linspace(5e-2, .5)])
+        j1s = []
+        j2s = []
+        for i,Etau in enumerate(Etaus):
+            print(f'{i}/{len(Etaus)}'.rjust(10), end='\r')
+            l = 1 / Etau / self.eoverhbar
+            j1, j2 = self.calculate_j(l = l, M=M, S_g=S_g, theta=theta)
+            j1s.append(j1)
+            j2s.append(j2)
+
+        j1s = np.array(j1s)
+        j2s = np.array(j2s)
+
+        b1 = self.kspace.b1
+        b2 = self.kspace.b2
+        jxs, jys = b1[:,None] * j1s[None,:] + b2[:,None] * j2s[None,:]
+
+        return jxs, jys 
+
+    def calculate_sigma(self, Etaus: np.ndarray, js=None, M = None, S_g = 10, theta=None):
+        if js is None:
+            jxs, jys = self.calculate_js(M=M, S_g = S_g, theta=theta)
+        else:
+            jxs, jys = js
+
+        b1 = self.kspace.b1
+        if theta is None:
+            theta = np.log(np.complex128(*b1)).imag
+
+
+        # should conpensate for the angle at which E is at
+        
+        sigma_x = (jxs[1:] -jxs[:-1])/(Etaus[1:] - Etaus[:-1])
+        sigma_y = (jys[1:] -jys[:-1])/(Etaus[1:] - Etaus[:-1])
+        return sigma_x, sigma_y 
+        
+    def __repr_(self):
+        calculated_rho = 'calculated rho' if self.rho is not None else 'not calculated rho'
+        return f'Classical_Conductivity({calculated_rho}{hash(self)})'
 
     def plot_energy(self, ax=None):
         if ax is None:

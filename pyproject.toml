@@ -15,6 +15,12 @@ dependencies = [
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
+# [tool.setuptools.packages.find]
+# where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["*.so", "*.mplstyle"]
+
 [tool.pytest.ini_options]
 addopts = [
     '--import-mode=importlib',

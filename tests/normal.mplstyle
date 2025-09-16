@@ -1,0 +1,7 @@
+text.usetex: True
+font.family: sans-serif
+font.sans-serif: Computer Modern Serif
+font.size: 14
+savefig.dpi: 300
+savefig.transparent: True
+
