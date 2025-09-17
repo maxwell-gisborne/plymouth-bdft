@@ -30,132 +30,132 @@ void panic(char* msg){
 }
 
 
-//  =============================================================================================
-//                                       Plotting Code
-//  =============================================================================================
+// //  =============================================================================================
+// //                                       Plotting Code
+// //  =============================================================================================
 
-struct plot_2d_config {
-  size_t N1; size_t N2;
-  char* title;
-  double* x;
-  double* y;
-  enum {REAL_IMAGE, COMP_IMAGE} type;
-  union {double complex* comp_image; double* real_image;};
-  union {double (*map_c)(double complex); double (*map_r)(double);};
-};
+// struct plot_2d_config {
+//   size_t N1; size_t N2;
+//   char* title;
+//   double* x;
+//   double* y;
+//   enum {REAL_IMAGE, COMP_IMAGE} type;
+//   union {double complex* comp_image; double* real_image;};
+//   union {double (*map_c)(double complex); double (*map_r)(double);};
+// };
 
-double identity(double x) {return x;}
+// double identity(double x) {return x;}
 
-void plot(int _N, double x[], complex double fx[]) {
-    double max_r = -1e300;
-    double max_i = -1e300;
-    double min_r = 1e300;
-    double min_i = 1e300;
-    for (int i = 0; i<_N; i++){
-     max_r = creal(fx[i]) > max_r ? creal(fx[i]) : max_r;
-     max_i = cimag(fx[i]) > max_i ? cimag(fx[i]) : max_i;
+// void plot(int _N, double x[], complex double fx[]) {
+//     double max_r = -1e300;
+//     double max_i = -1e300;
+//     double min_r = 1e300;
+//     double min_i = 1e300;
+//     for (int i = 0; i<_N; i++){
+//      max_r = creal(fx[i]) > max_r ? creal(fx[i]) : max_r;
+//      max_i = cimag(fx[i]) > max_i ? cimag(fx[i]) : max_i;
 
-     min_r = creal(fx[i]) < min_r ? creal(fx[i]) : min_r;
-     min_i = cimag(fx[i]) < min_i ? cimag(fx[i]) : min_i;
-   }
+//      min_r = creal(fx[i]) < min_r ? creal(fx[i]) : min_r;
+//      min_i = cimag(fx[i]) < min_i ? cimag(fx[i]) : min_i;
+//    }
 
-   printf("range [%f, %f] + i [%f, %f]\n", min_r, max_r, min_i, max_i);
+//    printf("range [%f, %f] + i [%f, %f]\n", min_r, max_r, min_i, max_i);
 
-    for (int i = 0; i<_N; i++){
-    printf("\033[35m%6.3f|\033[0m", x[i]);
+//     for (int i = 0; i<_N; i++){
+//     printf("\033[35m%6.3f|\033[0m", x[i]);
 
-    bool printed_r = false;
-    bool printed_i = false;
-    int width = 35;
-    for (int j = 0; j <= 2*width + 1; j++){
-      if ((j > width*((creal(fx[i]) - min_r)/(max_r - min_r))*2) & !printed_r) {
-        printed_r = true;
-        printf("\033[32mr\033[0m");
-      }
-      else if (j == width) printf("\033[35m¦\033[0m");
-      else if ((j > width*((cimag(fx[i]) - min_i)/(max_i - min_i))*2) & !printed_i) {
-        printed_i = true;
-        printf("\033[31mc\033[0m");
-      }
-      else printf(" ");
-    }
-    printf(" ¦  %3.1f + i %f3.1\n",creal(fx[i]), cimag(fx[i]));
-  }
-}
-
-
-
-void plot_2d(struct plot_2d_config config){
-  int N1 = config.N1;
-  int N2 = config.N2;
-  double* x = config.x;
-  double* y = config.y;
+//     bool printed_r = false;
+//     bool printed_i = false;
+//     int width = 35;
+//     for (int j = 0; j <= 2*width + 1; j++){
+//       if ((j > width*((creal(fx[i]) - min_r)/(max_r - min_r))*2) & !printed_r) {
+//         printed_r = true;
+//         printf("\033[32mr\033[0m");
+//       }
+//       else if (j == width) printf("\033[35m¦\033[0m");
+//       else if ((j > width*((cimag(fx[i]) - min_i)/(max_i - min_i))*2) & !printed_i) {
+//         printed_i = true;
+//         printf("\033[31mc\033[0m");
+//       }
+//       else printf(" ");
+//     }
+//     printf(" ¦  %3.1f + i %f3.1\n",creal(fx[i]), cimag(fx[i]));
+//   }
+// }
 
 
-  if (N1 == 0) panic("Called with invalid arguments, one dimention must be provieded");
-  if (N2 == 0) N2 = N1;
+
+// void plot_2d(struct plot_2d_config config){
+//   int N1 = config.N1;
+//   int N2 = config.N2;
+//   double* x = config.x;
+//   double* y = config.y;
 
 
-  if (x == NULL){
-    x = alloc(N1*sizeof(double));
-    for (int i=0; i<N1; i++) x[i] = i;
-  }
-
-  if (y == NULL){
-    y = alloc(N2*sizeof(double));
-    for (int i=0; i<N2; i++) y[i] = i;
-  }
-
- if (config.type == COMP_IMAGE) if (config.map_c == NULL) config.map_c = creal;
-  if (config.type == REAL_IMAGE) if (config.map_r == NULL) config.map_r = identity;
-
-  char* colors[10] = {
-    "38;5;18", // 0
-    "38;5;20", // 1
-    "38;5;39", // 2
-    "38;5;37", // 3
-    "38;5;35", // 4
-    "38;5;70", // 5
-    "38;5;142", // 6
-    "38;5;214", // 7
-    "38;5;208", // 8
-    "38;5;196", // 9
-  };
+//   if (N1 == 0) panic("Called with invalid arguments, one dimention must be provieded");
+//   if (N2 == 0) N2 = N1;
 
 
-  double min = 1e100;
-  double max = -1e100;
+//   if (x == NULL){
+//     x = alloc(N1*sizeof(double));
+//     for (int i=0; i<N1; i++) x[i] = i;
+//   }
 
-  for (int i=0; i<N1; i++)
-    for(int j=0; j<N2; j++){
-      const double point = (config.type == REAL_IMAGE)? config.map_r(config.real_image[j+N1*(i)])
-                                                      : config.map_c(config.comp_image[j+N1*(i)]);
-      max = point > max? point: max;
-      min = point < min? point: min;
-    }
+//   if (y == NULL){
+//     y = alloc(N2*sizeof(double));
+//     for (int i=0; i<N2; i++) y[i] = i;
+//   }
+
+//  if (config.type == COMP_IMAGE) if (config.map_c == NULL) config.map_c = creal;
+//   if (config.type == REAL_IMAGE) if (config.map_r == NULL) config.map_r = identity;
+
+//   char* colors[10] = {
+//     "38;5;18", // 0
+//     "38;5;20", // 1
+//     "38;5;39", // 2
+//     "38;5;37", // 3
+//     "38;5;35", // 4
+//     "38;5;70", // 5
+//     "38;5;142", // 6
+//     "38;5;214", // 7
+//     "38;5;208", // 8
+//     "38;5;196", // 9
+//   };
+
+
+//   double min = 1e100;
+//   double max = -1e100;
+
+//   for (int i=0; i<N1; i++)
+//     for(int j=0; j<N2; j++){
+//       const double point = (config.type == REAL_IMAGE)? config.map_r(config.real_image[j+N1*(i)])
+//                                                       : config.map_c(config.comp_image[j+N1*(i)]);
+//       max = point > max? point: max;
+//       min = point < min? point: min;
+//     }
      
-  printf("scaile:\n");
-  for (int n=0; n<10; n++){
-    printf("\t\033[%sm%d\033[0m -- %6.3E\n", colors[n], n, (double)n/9 *(max-min) + min );
-  }
-  printf("\nbin width = %E\n", (max-min)/9);
-  printf("\n");
+//   printf("scaile:\n");
+//   for (int n=0; n<10; n++){
+//     printf("\t\033[%sm%d\033[0m -- %6.3E\n", colors[n], n, (double)n/9 *(max-min) + min );
+//   }
+//   printf("\nbin width = %E\n", (max-min)/9);
+//   printf("\n");
 
-  printf("                       "); int title_len =  printf("%s\n", config.title);
-  printf("                       "); for (int i=0; i<title_len; i++) printf("-");
-  printf("\n");
+//   printf("                       "); int title_len =  printf("%s\n", config.title);
+//   printf("                       "); for (int i=0; i<title_len; i++) printf("-");
+//   printf("\n");
 
-  for (int i=0; i<N1; i++){
-    for(int j=0; j<N2; j++){
-      const unsigned point = round(9*(
-                                 ((config.type == REAL_IMAGE)? config.map_r(config.real_image[j+N1*(i)])
-                                                      : config.map_c(config.comp_image[j+N1*(i)]))
-                                 -min)/(max-min));
-      printf(" \033[%sm%d\033[0m", colors[point], point);
-      }
-    printf("\n");
-   }
-}
+//   for (int i=0; i<N1; i++){
+//     for(int j=0; j<N2; j++){
+//       const unsigned point = round(9*(
+//                                  ((config.type == REAL_IMAGE)? config.map_r(config.real_image[j+N1*(i)])
+//                                                       : config.map_c(config.comp_image[j+N1*(i)]))
+//                                  -min)/(max-min));
+//       printf(" \033[%sm%d\033[0m", colors[point], point);
+//       }
+//     printf("\n");
+//    }
+// }
 
 //  =============================================================================================
 //                                       Library Code
@@ -313,17 +313,17 @@ void nuk_reconstruction(
   }
 
 
-  plot_2d(
-    (struct plot_2d_config){
-    .N1 = N,
-    .type = COMP_IMAGE,
-    .map_c = creal,
-    .title = "reconstructed nuk (real part)",
-    .comp_image = nuk,
-    }
-  );
+  // plot_2d(
+  //   (struct plot_2d_config){
+  //   .N1 = N,
+  //   .type = COMP_IMAGE,
+  //   .map_c = creal,
+  //   .title = "reconstructed nuk (real part)",
+  //   .comp_image = nuk,
+  //   }
+  // );
 
-  plot(N,x,fx);
+  // plot(N,x,fx);
 
   logout("N = %zu\n", N);
 
