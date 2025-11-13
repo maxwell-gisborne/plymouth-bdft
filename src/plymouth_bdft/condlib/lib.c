@@ -11,7 +11,9 @@
 #define TAU 6.28318530717958623199592693708837032318115234375
 #define ROOT_TAU 2.506628274631000241612355239340104162693023681640625
 
+#ifndef logout
 #define logout(format, ...) fprintf(stderr, "\033[3;33mcondlib(%s:%03d)::\033[0m " format, __FUNCTION__, __LINE__, ##__VA_ARGS__)
+#endif
 
 static int mcount = 0;
 void* alloc(size_t size){
@@ -178,11 +180,10 @@ const char* version(){
   //  I dont use  complex.h because python's ctypes
   //  does not have good interop for it
 
-void calculate_nabla(double* nabla_out,
+void calculate_nabla(complex double* nabla_out,
                      const double* image_in,
-                     const double ai[2][2],
-                     const size_t N,
-                     const double L){
+                     const double basis_map[2][2],
+                     const size_t N){
  //   calculate nabla along indexes via finite difference.
  //      - central difference in the bulk
  //      - forward difference on the left/top
@@ -205,25 +206,29 @@ void calculate_nabla(double* nabla_out,
       // logout("\t (a,b) = (%d,%d)\n", a,b);
       double diff1, diff2;
       if (a == 0){ // top row
-        diff1 = (image_in[b + N*(a+1)] - image_in[b + N*(a)]) * N/L;
+        diff1 = (image_in[b + N*(a+1)] - image_in[b + N*(a)]) * N;
       } else if (a == N-1){ // bottm row
-        diff1 = (image_in[b + N*a]     - image_in[b + N*(a-1)]) * N/L;
+        diff1 = (image_in[b + N*a]     - image_in[b + N*(a-1)]) * N;
       } else { // middle of collumn
-        diff1 = (image_in[b + N*(a+1)] - image_in[b + N*(a-1)])/2.0 * N/L;
+        diff1 = (image_in[b + N*(a+1)] - image_in[b + N*(a-1)])/2.0 * N;
       }
 
       if (b == 0) { // left column
-        diff2 = (image_in[b+1 + N*a] - image_in[b + N*a]) * N/L;
+        diff2 = (image_in[b+1 + N*a] - image_in[b + N*a]) * N;
       } else if (b == N-1){ // right column
-        diff2 = (image_in[b + N*a] - image_in[b-1 + N*a]) * N/L;
+        diff2 = (image_in[b + N*a] - image_in[b-1 + N*a]) * N;
       } else { // middle of row
-        diff2 = (image_in[(b + 1) + N*a] - image_in[(b-1) + N*a])/2.0 * N/L;
+        diff2 = (image_in[(b + 1) + N*a] - image_in[(b-1) + N*a])/2.0 * N;
       }
 
-      nabla_out[b + N*(a + N*(0))] = diff1 * ai[0][0] + diff2 * ai[1][0] ;
-      nabla_out[b + N*(a + N*(1))] = diff1 * ai[0][1] + diff2 * ai[1][1] ;
+      // This is mapping back to the basis cartisian basis in a1,a2 are defined 
+      nabla_out[b + N*(a + N*(0))] = diff1 * basis_map[0][0] + diff2 * basis_map[0][1] ;
+      nabla_out[b + N*(a + N*(1))] = diff1 * basis_map[1][0] + diff2 * basis_map[1][1] ;
+
+      // nabla_out[b + N*(a + N*(0))] = ai[1][0];
+      // nabla_out[b + N*(a + N*(1))] = ai[1][1];
   }
-logout("\n");
+  logout("\n");
 }
 
 
@@ -248,7 +253,7 @@ void calculate_nu(
   const double* epsilon,
   const size_t N ){
 
-    double complex* nuk = fftw_alloc_complex(N*N*sizeof(double complex));
+    double complex* nuk = fftw_alloc_complex(N*N);
     calculate_nuk(nuk, epsilon, beta, mu, N);
 
     // Im not sure if this is the right sign
@@ -287,14 +292,7 @@ void nuk_reconstruction(
   const complex double* nu_ab,
   const double a[2][2],
   const size_t N
-){
-  // TODO: Its the slow index that is trunkated, not the fast index....
-  // Checks the deffinition of nu_ab,
-  // that is that when sumed against phases that match its indexes
-  // nu_k is reproduec. No use of exsternal fft libraries used.
-  //
-  // Assume the outptu buffer (nuk) is zeroed already
-  // The output is complex but the real part should be zero.
+  ){
 
   for (unsigned i=0; i<N; i++)
     for (unsigned j=0; j<N; j++) {
@@ -304,26 +302,6 @@ void nuk_reconstruction(
               nuk[j+N*i] += nu_ab[b + N*a] * cexp(I*TAU*(a*i + b*j)/N);
       }
   }
-
-  double x[N];
-  complex double fx[N];
-  for (int i=0; i<N; i++){
-    x[i] = i;
-    fx[i] = nuk[N*i];
-  }
-
-
-  // plot_2d(
-  //   (struct plot_2d_config){
-  //   .N1 = N,
-  //   .type = COMP_IMAGE,
-  //   .map_c = creal,
-  //   .title = "reconstructed nuk (real part)",
-  //   .comp_image = nuk,
-  //   }
-  // );
-
-  // plot(N,x,fx);
 
   logout("N = %zu\n", N);
 
@@ -338,8 +316,8 @@ void nuk_reconstruction(
 
 void calculate_gamma(double complex* gamma,
                      const double* epsilon,
-                     const double ai[2][2],
-                     const size_t N, const double L){
+                     const double basis_map[2][2],
+                     const size_t N, const double A){
     logout("C gamma calc called\n");
 
     //          ,-> sign of the small index
@@ -351,105 +329,84 @@ void calculate_gamma(double complex* gamma,
     // epsilon = N × N
     //                `-> b
 
-    {
-      logout("\033[32mabout to calculate nabla\n");
-      //                  ,-> alpha
+    { 
+      logout("\033[32m First Calculate Nabla Epsilon from Epsilon\n");
+      // 
+      //                  ,-> beta index
       // nabla epsilon  = 2 × N × N
       //                       \  `-> b
       //                        `---> a (a>=0)
-      double* nabla_epsilon = alloc(2*N*N*sizeof(double));
-      calculate_nabla(nabla_epsilon, epsilon, ai, N, L);
 
-      logout("about to do the fft\n");
-      fftw_plan plan = fftw_plan_dft_r2c_2d(N, N, nabla_epsilon, gamma, FFTW_ESTIMATE);
+      complex double* nabla_epsilon = alloc(2*N*N*sizeof(complex double));
+      calculate_nabla(nabla_epsilon, epsilon, basis_map, N);
+
+      logout("Then perform the fft\n");
+      fftw_plan plan = fftw_plan_dft_2d(N, N, nabla_epsilon, gamma, 1, FFTW_ESTIMATE);
       fftw_execute(plan);
 
-      plan = fftw_plan_dft_r2c_2d(N, N, nabla_epsilon + N*N, gamma, FFTW_ESTIMATE);
+      // its this block that is causing the segfault
+      plan = fftw_plan_dft_2d(N, N, nabla_epsilon + N*N, gamma + N*N, 1, FFTW_ESTIMATE);
+      fftw_execute(plan);
       fftw_destroy_plan(plan);
-      logout("fft complete\n");
-
       free(nabla_epsilon);
     }
 
-    logout("Normalizeing\n");
-    const double A = hexegon_area(ai);
+    logout("Finaly a normalization Normalizeing\n");
     for (size_t a = 0; a < N; a++)
       for (size_t b = 0; b < N; b++) {
-        gamma[b + N*(a+N*0)] /= A*N*N;
-        gamma[b + N*(a+N*1)] /= A*N*N;
+        gamma[b + N*(a+N*0)] *= A/(TAU*N*N);
+        gamma[b + N*(a+N*1)] *= A/(TAU*N*N);
     }
       
 }
+
+double complex F (
+             const int a,
+             const int b,
+             const int beta,
+             const double E,
+             const double Ebeta[2][2],
+             const double ai[2][2],
+             const double etau_hbar) {
+
+  double Ehat_dot_a[2][2]; // if (!Ehat_dot_a[0][0])
+  // double Ebeta_dot_omega = ;
+
+  for (int i=0; i<2; i++) {
+    for (int _beta=0; _beta<2; _beta++) {
+      Ehat_dot_a[_beta][i] = Ebeta[_beta][0] * ai[i][0] + Ebeta[_beta][1] * ai[i][1];
+    }
+  }
+
+  return I * etau_hbar * (a * Ehat_dot_a[beta][0] + b * Ehat_dot_a[beta][1])
+           * cpow( 1 + I * etau_hbar * E * ( a * Ehat_dot_a[0][0] + b * Ehat_dot_a[0][1] ), -2);
+}
+
 
 void calculate_sigma(double *sigma_tau,
                      const double* epsilon,
                      const double E,
                      const double ai[2][2],
-                     const double Ehat[2],
+                     const double Ehat[2][2],
                      const size_t N,
                      const double etau_hbar){
 
-   logout("Sigma calculation started\n");
-   // nu is the FFT of a real valued 2D array of shape N×N,
-   // thus the output is a complex valued 2D of shape (N/2 +1)×N
-   logout("calculating nu\n");
-   double complex* nu = alloc(N*N*sizeof(double complex));
-   calculate_nu(nu,1.0, 0.0, epsilon, N);
+  logout("Sigma calculation started\n");
 
-   logout("calculating Gamma\n");
-   double complex* gamma = alloc(2*N*N*sizeof(double complex));
-   calculate_gamma(gamma, epsilon, ai, N, 1.0/N); // need a better delta
+  double complex* nu = alloc(N*N*sizeof(double complex));
+  calculate_nu(nu,1.0, 0.0, epsilon, N);
 
-   const double Ehat_p[2] = {Ehat[1], -Ehat[0]};
-   const double Ehat_b0_dot_a1 = Ehat[0] * ai[0][0] + Ehat[1] * ai[0][1];
-   const double Ehat_b0_dot_a2 = Ehat[0] * ai[1][0] + Ehat[1] * ai[1][1];
-   const double Ehat_b1_dot_a1 = Ehat_p[0] * ai[0][0] + Ehat_p[1] * ai[0][1];
-   const double Ehat_b1_dot_a2 = Ehat_p[0] * ai[1][0] + Ehat_p[1] * ai[1][1];
-
-   //                      ,-> beta
-   const double Ehat_dot_a[2][2] = {
-   //                          `-> i
-     { // Ehat dot a0,  Ehat dot a1
-       Ehat[0] * ai[0][0] + Ehat[1] * ai[0][1],
-       Ehat[0] * ai[1][0] + Ehat[1] * ai[1][1]
-     },
-     { // Ehat_p dot a0, Ehat_p dot a1
-       Ehat_p[0] * ai[0][0] + Ehat_p[1] * ai[0][1],
-       Ehat_p[0] * ai[1][0] + Ehat_p[1] * ai[1][1]
-     }
-   };
-   
- logout("Starting main sigma tau loop\n");
+  double complex* gamma = alloc(2*N*N*sizeof(double complex));
+  calculate_gamma(gamma, epsilon, ai, N, 1.0/N); // need a better delta
 
   for (unsigned alpha = 0; alpha < 2; alpha++)
     for (unsigned beta = 0; beta < 2; beta++)
-      for (int a = 0; a < N; a++){
-        logout("outer_loop = %d   \r", a);
-        for (int b = 0; b < N/2+1; b++) { // <- this should be over the full range
-          sigma_tau[b + N*(a + N*(beta + 2*alpha))] = 0;
-          for (int sb = 0; sb < 2; sb++) {
-          //  reflection is not done correctly
-          //                        a b
-          //                       /---\
-          // sigma_tau =   2 × 2 × N × N 
-          //               \---/       
-          //             alpha beta       
-          // 
-          // I need to understand the negetive sign
-          sigma_tau[b + N*(a + N*(beta + 2*alpha))] += 2*creal(
-                                                   gamma[b + N*(a + N*(alpha))] // gamma has the same indexing structure, with an additional large demention for the alpha index
-                                                 * nu[b + N*a] // this is nu_ab, a has negetive indexies but b does not, thus the rante is a->N, b->N/2+1
-                                                 * I * etau_hbar * (
-                                                     a * Ehat_dot_a[beta][0] + (1-2*sb)*b *Ehat_dot_a[beta][1]
-                                                 ) * cpow(
-                                                          1 + I * etau_hbar *(
-                                                                a * Ehat_dot_a[0][0] + (1-2*sb)*b * Ehat_dot_a[0][1]
-                                                            ),
-                                                          -2)
-                                                 );
-
-      }
-    }
+      for (unsigned a = 0; a < N; a++)
+        for (unsigned b = 0; b < N/2+1; b++)
+  { 
+    sigma_tau[b + N*(a + N*(beta + 2*alpha))] =
+               2*creal(F(a,b, beta, E, Ehat, ai, etau_hbar) * gamma[b + N*(a + 2*alpha)] * nu[b + N*a] )
+             + 2*creal(F(a,-b, beta, E, Ehat, ai, etau_hbar) * gamma[(N-b) + N*(a + 2*alpha)] * nu[(N-b) + N*a] );
   }
 
   free(nu);
