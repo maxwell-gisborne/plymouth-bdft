@@ -316,7 +316,7 @@ void nuk_reconstruction(
 
 void calculate_gamma(double complex* gamma,
                      const double* epsilon,
-                     const double basis_map[2][2],
+                     const double Ehat_dot_a[2][2],
                      const size_t N, const double A){
     logout("C gamma calc called\n");
 
@@ -329,35 +329,23 @@ void calculate_gamma(double complex* gamma,
     // epsilon = N × N
     //                `-> b
 
-    { 
-      logout("\033[32m First Calculate Nabla Epsilon from Epsilon\n");
-      // 
-      //                  ,-> beta index
-      // nabla epsilon  = 2 × N × N
-      //                       \  `-> b
-      //                        `---> a (a>=0)
+      fftw_plan plan = fftw_plan_dft_2d(N,N, gamma, gamma,1, FFTW_ESTIMATE);
 
-      complex double* nabla_epsilon = alloc(2*N*N*sizeof(complex double));
-      calculate_nabla(nabla_epsilon, epsilon, basis_map, N);
+      for (int alpha=0; alpha<2; alpha++)
+        for (int i=0; i<N; i++)
+          for (int j=0;j<N;j++){
+            gamma[j + N*(i + N*alpha)] = epsilon[j + N*i];
+      }
 
-      logout("Then perform the fft\n");
-      fftw_plan plan = fftw_plan_dft_2d(N, N, nabla_epsilon, gamma, 1, FFTW_ESTIMATE);
       fftw_execute(plan);
 
-      // its this block that is causing the segfault
-      plan = fftw_plan_dft_2d(N, N, nabla_epsilon + N*N, gamma + N*N, 1, FFTW_ESTIMATE);
-      fftw_execute(plan);
+      for (int alpha = 0; alpha<2; alpha++)
+        for (int a=0; a<N; a++)
+          for (int b=0;b<N;b++){
+            gamma[b + N*(a + N*alpha)] *= -I * (a * Ehat_dot_a[alpha][0] + b * Ehat_dot_a[alpha][1]) * A/(TAU*N*N);
+      }
+
       fftw_destroy_plan(plan);
-      free(nabla_epsilon);
-    }
-
-    logout("Finaly a normalization Normalizeing\n");
-    for (size_t a = 0; a < N; a++)
-      for (size_t b = 0; b < N; b++) {
-        gamma[b + N*(a+N*0)] *= A/(TAU*N*N);
-        gamma[b + N*(a+N*1)] *= A/(TAU*N*N);
-    }
-      
 }
 
 double complex F (
@@ -396,8 +384,14 @@ void calculate_sigma(double *sigma_tau,
   double complex* nu = alloc(N*N*sizeof(double complex));
   calculate_nu(nu,1.0, 0.0, epsilon, N);
 
-  double complex* gamma = alloc(2*N*N*sizeof(double complex));
-  calculate_gamma(gamma, epsilon, ai, N, 1.0/N); // need a better delta
+  double complex* gamma = fftw_alloc_complex(2*N*N);
+  double Ehat_dot_a[2][2] = {0};
+  for (int i=0; i<2; i++)
+    for (int j=0; j<2; j++) {
+      Ehat_dot_a[i][j] = Ehat[i][0] * ai[j][0] +  Ehat[i][1] * ai[j][1];
+  }
+
+  calculate_gamma(gamma, epsilon, Ehat_dot_a, N, 1.0/N); // need a better delta
 
   for (unsigned alpha = 0; alpha < 2; alpha++)
     for (unsigned beta = 0; beta < 2; beta++)
